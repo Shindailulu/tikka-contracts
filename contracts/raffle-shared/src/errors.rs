@@ -91,6 +91,13 @@ pub enum ProtocolError {
     CommitAlreadySubmitted = 70,
     OraclePublicKeyMismatch = 71,
     PrizeSwept = 72,
+    DrawingNotStarted = 73,
+    MissingCommit = 74,
+    CommitMismatch = 75,
+    TooFewCommits = 76,
+    RandomnessSourceTooWeakForPrize = 77,
+    AdminTransferPending = 78,
+    NoPendingTransfer = 79,
 
     // ------------------------------------------------------------------ --
     // Factory errors — mapped to 200+ to avoid conflicts with instance codes.

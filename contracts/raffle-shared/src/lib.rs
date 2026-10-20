@@ -7,7 +7,7 @@ pub mod errors;
 pub mod events;
 pub mod math;
 
-pub use math::{apply_bp, split_bp, BP_DENOMINATOR};
+pub use math::{split_bp, BP_DENOMINATOR};
 
 pub use config_builder::{ConfigValidationError, RaffleConfigBuilder};
 

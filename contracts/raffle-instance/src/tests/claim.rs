@@ -187,7 +187,7 @@ fn test_refund_ticket_credits_payer_not_owner() {
     let owner_before = token_client.balance(&recipient);
 
     client.cancel_raffle(&CancelReason::CreatorCancelled);
-    let refunded = client.refund_ticket(&payer, &0);
+    let refunded = client.refund_ticket(&0);
 
     assert_eq!(refunded, MIN_TICKET_PRICE);
     assert_eq!(token_client.balance(&payer), payer_before + MIN_TICKET_PRICE);
@@ -235,7 +235,7 @@ fn test_batch_refund_tickets_credits_payer_not_owner() {
     // The owner may drive the batch, but the refund still follows the payer.
     let refunded = client.batch_refund_tickets(&recipient, &soroban_sdk::vec![&env, 0u32, 1u32]);
 
-    assert_eq!(refunded, MIN_TICKET_PRICE * 2);
+    assert_eq!(refunded, 2);
     assert_eq!(
         token_client.balance(&payer),
         payer_before + MIN_TICKET_PRICE * 2

@@ -30,8 +30,8 @@ mod tickets;
 mod views;
 
 pub(crate) use helpers::{
-    calculate_tier_prize, read_raffle, require_admin, require_global_not_paused,
-    transition_status, validate_token_address, write_raffle, Guard,
+    calculate_tier_prize, read_admin, read_raffle, require_admin, require_factory,
+    require_global_not_paused, transition_status, validate_token_address, write_raffle, Guard,
 };
 #[cfg(any(test, feature = "testutils"))]
 pub use helpers::assert_solvent;
@@ -49,27 +49,12 @@ use raffle_shared::{
         EMERGENCY_WITHDRAW_DELAY_SECONDS, MAX_CLAIM_LOCKUP_SECONDS, MAX_DESCRIPTION_LENGTH,
         MAX_PRIZES, MAX_PRIZE_AMOUNT, MAX_PROTOCOL_FEE_BP,
         MAX_SWAP_DEADLINE_SECONDS, MAX_TICKETS_LIMIT, MIN_CLAIM_EXPIRY_SECONDS, MIN_TICKET_PRICE,
-        ORACLE_TIMEOUT_LEDGERS, RANDOMNESS_MIN_DELAY_LEDGERS,
     },
     exceeds_internal_randomness_cap, BuyQuote, CancelReason, FairnessData, QuorumConfig,
     RaffleConfig, RaffleStats, RaffleStatus, RandomnessSource, RandomnessType, Ticket,
 };
 
-use self::randomness::{
-    build_vrf_proof_message, OracleSeedWinnerSelection, WinnerSelectionStrategy,
-};
-
-use crate::events::{
-    CancelScheduled, ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn,
-    FeesWithdrawn, MetadataHashUpdated, OracleAddressUpdated, OracleSeedDelivered, PrizeClaimed,
-    PrizeDeposited, PrizeRefunded, ProtocolFeeUpdated, RaffleCancelled, RaffleCreated,
-    RaffleFailed, RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered,
-    RandomnessReceived, RandomnessRequested, StorageWiped, SwapDeadlineUpdated, TicketNftMinted,
-    TicketPurchased, TicketRefunded, TicketSalesPaused, TicketSalesResumed, TokensRescued,
-    WinnerDrawn,
-};
-
-const RANDOMNESS_MIN_DELAY_LEDGERS: u32 = 10;
+use crate::events::RaffleCreated;
 
 #[contract]
 pub struct RaffleInstance;
@@ -250,7 +235,7 @@ pub struct CommitRevealEntry {
 // and frontend messages). Exporting the spec would make the derive panic with
 // `LengthExceedsMax`, so the spec entry is omitted while every code and name
 // is preserved.
-#[contracterror(export = false)]
+#[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Error {
     RaffleInactive = 2,
@@ -297,7 +282,7 @@ pub enum Error {
     InvalidEndTime = 62,
     InvalidAdminAddress = 63,
     RandomnessTooEarly = 64,
-    CancelTimelockActive = 67,
+    CancelTimelockActive = 65,
     CancelNotScheduled = 66,
     ExceedsMaxTicketsPerAddress = 67,
     OracleNotRegistered = 68,
@@ -306,19 +291,22 @@ pub enum Error {
     /// The Ed25519 public key submitted to `provide_randomness` does not match
     /// the key registered for this raffle's oracle (#985).
     OraclePublicKeyMismatch = 71,
+    PrizeSwept = 72,
     /// Randomness callback arrived before the raffle entered the drawing phase.
-    /// Code 72.
-    DrawingNotStarted = 72,
-    /// Reveal was submitted for an oracle that has not committed yet. Code 73.
-    MissingCommit = 73,
+    /// Code 73.
+    DrawingNotStarted = 73,
+    /// Reveal was submitted for an oracle that has not committed yet. Code 74.
+    MissingCommit = 74,
     /// Revealed pre-image does not hash to the commitment stored for this
-    /// oracle. Code 74.
-    CommitMismatch = 74,
-    /// Reveal attempted before `k` commitments were recorded. Code 75.
-    TooFewCommits = 75,
+    /// oracle. Code 75.
+    CommitMismatch = 75,
+    /// Reveal attempted before `k` commitments were recorded. Code 76.
+    TooFewCommits = 76,
     /// Configured randomness source is too weak for the configured prize
-    /// amount. Code 76.
-    RandomnessSourceTooWeakForPrize = 76,
+    /// amount. Code 77.
+    RandomnessSourceTooWeakForPrize = 77,
+    AdminTransferPending = 78,
+    NoPendingTransfer = 79,
 }
 
 /// Returns the effective per-address ticket cap, if any.
@@ -694,108 +682,11 @@ if config.randomness_source == RandomnessSource::External {
     /// finalized on the k-th valid reveal — never on a commit alone.
     pub fn provide_quorum_randomness(
         env: Env,
-        caller: Address,
+        oracle: Address,
         random_seed: u64,
         request_id: u64,
     ) -> Result<(), Error> {
-        let drawing_lock: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::DrawingLock)
-            .unwrap_or(false);
-        if !drawing_lock {
-            return Err(Error::InvalidStatus);
-        }
-
-        caller.require_auth();
-
-        let raffle = read_raffle(&env)?;
-
-        // Verify random seed context: request_id
-        let stored: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::RandomnessRequestId)
-            .ok_or(Error::NoRandomnessRequest)?;
-        if stored != request_id {
-            return Err(Error::InvalidParameters);
-        }
-
-        // Extract the oracle list from the Quorum config.
-        let (k, oracles) = match &raffle.randomness_source {
-            RandomnessSource::Quorum(QuorumConfig { k, oracles }) => (k.clone(), oracles.clone()),
-            _ => return Err(Error::InvalidParameters),
-        };
-
-        // Verify caller is a registered oracle.
-        let mut is_registered = false;
-        let num_oracles = oracles.len();
-        for i in 0..num_oracles {
-            if let Some(addr) = oracles.get(i) {
-                if addr == caller {
-                    is_registered = true;
-                    break;
-                }
-            }
-        }
-        if !is_registered {
-            return Err(Error::OracleNotRegistered);
-        }
-
-        // Dedup: reject if this oracle already submitted.
-        if env.storage().persistent().has(&DataKey::QuorumSeed(caller.clone())) {
-            return Err(Error::DuplicateOracleSubmission);
-        }
-
-        // Store the seed.
-        env.storage()
-            .persistent()
-            .set(&DataKey::QuorumSeed(caller.clone()), &random_seed);
-
-        // Track submission order.
-        let mut submitted: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::QuorumSubmittedOracles)
-            .unwrap_or_else(|| Vec::new(&env));
-        submitted.push_back(caller.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::QuorumSubmittedOracles, &submitted);
-
-        let count = submitted.len() as u32;
-
-        // Emit delivery event.
-        OracleSeedDelivered {
-            oracle: caller.clone(),
-            seed: random_seed,
-            request_id,
-            current_count: count,
-            threshold: k,
-            timestamp: env.ledger().timestamp(),
-        }
-        .publish(&env);
-
-        // Check if quorum reached.
-        if count >= k {
-            // Build the seed list from storage.
-            let mut seeds = Vec::new(&env);
-            for i in 0..submitted.len() {
-                if let Some(addr) = submitted.get(i) {
-                    if let Some(s) = env
-                        .storage()
-                        .persistent()
-                        .get::<_, u64>(&DataKey::QuorumSeed(addr.clone()))
-                    {
-                        seeds.push_back((addr.clone(), s));
-                    }
-                }
-            }
-
-            let aggregate = randomness::aggregate_quorum_seeds(&env, request_id, &seeds);
-            helpers::do_finalize_with_seed(&env, raffle, aggregate, RandomnessType::Quorum, Some(seeds))?;
-        }
-
+        let result = draw::provide_quorum_randomness(env.clone(), oracle, random_seed, request_id);
         #[cfg(any(test, feature = "testutils"))]
         assert_solvent_after_success(&env, &result);
         result

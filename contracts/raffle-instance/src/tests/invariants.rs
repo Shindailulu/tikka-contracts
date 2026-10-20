@@ -1,6 +1,6 @@
 use proptest::prelude::*;
-use crate::{calculate_tier_prize, Raffle, RaffleStatus, MAX_PRIZE_AMOUNT, MIN_TICKET_PRICE};
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Vec};
+use crate::{calculate_tier_prize, DataKey, Raffle, RaffleStatus, MAX_PRIZE_AMOUNT, MIN_TICKET_PRICE};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, BytesN, Env, String, Vec};
 
 fn valid_prize_weights() -> impl Strategy<Value = std::vec::Vec<u32>> {
     prop::collection::vec(0u32..=10_000, 0..=99)
@@ -57,7 +57,6 @@ fn test_raffle(env: &Env, weights: &[u32], prize_amount: i128) -> Raffle {
         metadata_hash: BytesN::from_array(env, &[1; 32]),
         unique_winners: false,
         nft_contract: None,
-        bundles: Vec::new(env),
     }
 }
 
@@ -159,6 +158,8 @@ fn run_solvency_lifecycle(ticket_count: u32, first_tier_bp: u32, cancel: bool) {
         bundles: Vec::new(&env),
         prize_token: None,
         nft_contract: None,
+        max_tickets_per_address: 0,
+        oracle_public_key: None,
     };
 
     client.init(&factory, &admin, &creator, &config);
@@ -190,7 +191,7 @@ fn run_solvency_lifecycle(ticket_count: u32, first_tier_bp: u32, cancel: bool) {
         assert_contract_solvent(&env, &contract_id);
 
         for ticket_id in 1..=ticket_count {
-            client.refund_ticket(&payers[(ticket_id - 1) as usize], &ticket_id);
+            client.refund_ticket(&ticket_id);
             assert_contract_solvent(&env, &contract_id);
         }
 
@@ -543,7 +544,7 @@ fn invoke_entrypoint_for_rejection(
         "claim_prize" => client.try_claim_prize(creator, &0).is_err(),
         "sweep_unclaimed" => client.try_sweep_unclaimed(&0, &1).is_err(),
         "refund_prize" => client.try_refund_prize().is_err(),
-        "refund_ticket" => client.try_refund_ticket(creator, &1).is_err(),
+        "refund_ticket" => client.try_refund_ticket(&1).is_err(),
         "batch_refund_tickets" => client
             .try_batch_refund_tickets(creator, &soroban_sdk::Vec::new(env))
             .is_err(),
@@ -636,6 +637,7 @@ fn test_entrypoints_reject_every_prohibited_status() {
         winners: soroban_sdk::Vec::new(&env),
         randomness_source: raffle_shared::RandomnessSource::Internal,
         oracle_address: None,
+        oracle_public_key: None,
         protocol_fee_bp: 0,
         treasury_address: None,
         swap_router: None,

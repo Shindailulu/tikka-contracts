@@ -579,3 +579,23 @@ fn every_admin_entrypoint_rejects_non_admin() {
         assert!(result.is_err());
     }
 }
+
+#[test]
+fn uninitialized_contract_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let stranger = Address::generate(&env);
+
+    assert_eq!(client.try_set_admin(&stranger), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_pause(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_unpause(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_withdraw_fees(&stranger, &100), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_rescue_tokens(&stranger, &stranger, &100), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_sweep_dust(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_wipe_storage(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_pause_ticket_sales(&stranger), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_resume_ticket_sales(&stranger), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_emergency_withdraw(&stranger), Err(Ok(Error::NotInitialized)));
+}

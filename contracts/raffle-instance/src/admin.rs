@@ -10,9 +10,9 @@ use crate::events::{
     TicketSalesResumed, TokensRescued,
 };
 use crate::{
-    calculate_tier_prize, read_raffle, require_admin, write_raffle, DataKey, Error, RaffleStatus,
-    transition_status, EMERGENCY_WITHDRAW_DELAY_SECONDS, MAX_PROTOCOL_FEE_BP,
-    MAX_SWAP_DEADLINE_SECONDS,
+    calculate_tier_prize, read_admin, read_raffle, require_admin, require_factory, write_raffle,
+    DataKey, Error, RaffleStatus, transition_status, EMERGENCY_WITHDRAW_DELAY_SECONDS,
+    MAX_PROTOCOL_FEE_BP, MAX_SWAP_DEADLINE_SECONDS,
 };
 
 fn outstanding_ticket_refunds(env: &Env, raffle: &crate::Raffle) -> Result<i128, Error> {
@@ -76,6 +76,15 @@ fn token_entitlement(env: &Env, raffle: &crate::Raffle, token: &Address) -> Resu
     Ok(entitlement)
 }
 
+pub(crate) fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+    let _old = require_admin(&env)?;
+    if !new_admin.exists() || new_admin == env.current_contract_address() {
+        return Err(Error::InvalidAdminAddress);
+    }
+    env.storage().instance().set(&DataKey::Admin, &new_admin);
+    Ok(())
+}
+
 pub(crate) fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
     let current_admin = require_admin(&env)?;
     if !new_admin.exists() || new_admin == env.current_contract_address() {
@@ -104,11 +113,7 @@ pub(crate) fn accept_admin(env: Env) -> Result<(), Error> {
         .ok_or(Error::NoPendingTransfer)?;
     new_admin.require_auth();
 
-    let old_admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotAuthorized)?;
+    let old_admin: Address = read_admin(&env)?;
     env.storage().instance().set(&DataKey::Admin, &new_admin);
     env.storage().instance().remove(&DataKey::PendingAdmin);
 
@@ -203,12 +208,7 @@ pub(crate) fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error>
     let mut raffle = read_raffle(&env)?;
     match reason {
         CancelReason::AdminCancelled => {
-            let admin: Address = env
-                .storage()
-                .instance()
-                .get(&DataKey::Admin)
-                .ok_or(Error::NotAuthorized)?;
-            admin.require_auth();
+            let admin = require_admin(&env)?;
             // For admin cancels, schedule the cancellation with a timelock
             let now = env.ledger().timestamp();
             let cancel_at = now.checked_add(TIMELOCK_DELAY_SECONDS)
@@ -322,12 +322,7 @@ pub(crate) fn update_metadata_hash(env: Env, new_hash: BytesN<32>) -> Result<(),
 }
 
 pub(crate) fn pause(env: Env) -> Result<(), Error> {
-    let f: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Factory)
-        .ok_or(Error::NotAuthorized)?;
-    f.require_auth();
+    let f = require_factory(&env)?;
     env.storage().instance().set(&DataKey::Paused, &true);
     ContractPaused {
         paused_by: f,
@@ -338,12 +333,7 @@ pub(crate) fn pause(env: Env) -> Result<(), Error> {
 }
 
 pub(crate) fn unpause(env: Env) -> Result<(), Error> {
-    let f: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Factory)
-        .ok_or(Error::NotAuthorized)?;
-    f.require_auth();
+    let f = require_factory(&env)?;
     env.storage().instance().set(&DataKey::Paused, &false);
     ContractUnpaused {
         unpaused_by: f,
@@ -356,11 +346,7 @@ pub(crate) fn unpause(env: Env) -> Result<(), Error> {
 pub(crate) fn pause_ticket_sales(env: Env, caller: Address) -> Result<(), Error> {
     caller.require_auth();
     let mut raffle = read_raffle(&env)?;
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotAuthorized)?;
+    let admin: Address = read_admin(&env)?;
     if caller != raffle.creator && caller != admin {
         return Err(Error::NotAuthorized);
     }
@@ -380,11 +366,7 @@ pub(crate) fn pause_ticket_sales(env: Env, caller: Address) -> Result<(), Error>
 pub(crate) fn resume_ticket_sales(env: Env, caller: Address) -> Result<(), Error> {
     caller.require_auth();
     let mut raffle = read_raffle(&env)?;
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotAuthorized)?;
+    let admin: Address = read_admin(&env)?;
     if caller != raffle.creator && caller != admin {
         return Err(Error::NotAuthorized);
     }
@@ -420,6 +402,7 @@ pub(crate) fn withdraw_fees(env: Env, recipient: Address, amount: i128) -> Resul
     }
     let tc = token::Client::new(&env, &raffle.payment_token);
     tc.try_transfer(&env.current_contract_address(), &recipient, &amount)
+        .map_err(|_| Error::TokenTransferFailed)?
         .map_err(|_| Error::TokenTransferFailed)?;
     let remaining = acc.checked_sub(amount).ok_or(Error::ArithmeticOverflow)?;
     env.storage()
@@ -446,12 +429,7 @@ pub(crate) fn rescue_tokens(
     recipient: Address,
     amount: i128,
 ) -> Result<(), Error> {
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotAuthorized)?;
-    admin.require_auth();
+    let admin = require_admin(&env)?;
     if amount <= 0 {
         return Err(Error::InvalidParameters);
     }
@@ -487,12 +465,7 @@ pub(crate) fn rescue_tokens(
 /// refunded and every ticket refund completed. Accumulated fees remain for
 /// `withdraw_fees` and are never swept as dust.
 pub(crate) fn sweep_dust(env: Env) -> Result<(), Error> {
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotAuthorized)?;
-    admin.require_auth();
+    let admin = require_admin(&env)?;
 
     let raffle = read_raffle(&env)?;
     if raffle.status != RaffleStatus::Claimed && raffle.status != RaffleStatus::Cancelled {
@@ -555,12 +528,7 @@ pub(crate) fn sweep_dust(env: Env) -> Result<(), Error> {
 /// The operation is rejected for every non-terminal status or when either
 /// configured token has a non-zero balance. It emits [`StorageWiped`].
 pub(crate) fn wipe_storage(env: Env) -> Result<(), Error> {
-    let factory: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Factory)
-        .ok_or(Error::NotAuthorized)?;
-    factory.require_auth();
+    let factory = require_factory(&env)?;
     let raffle = read_raffle(&env)?;
     if raffle.status != RaffleStatus::Cancelled
         && raffle.status != RaffleStatus::Claimed
@@ -671,11 +639,7 @@ pub(crate) fn emergency_withdraw(env: Env, caller: Address) -> Result<(), Error>
         return Err(Error::PrizeNotDeposited);
     }
 
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotAuthorized)?;
+    let admin: Address = read_admin(&env)?;
     if caller != raffle.creator && caller != admin {
         return Err(Error::NotAuthorized);
     }

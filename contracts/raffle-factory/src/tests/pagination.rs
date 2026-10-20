@@ -304,3 +304,35 @@ fn test_clean_old_raffle_already_tombstoned_rejected() {
     );
     assert_eq!(env.events().all().len(), start_events);
 }
+
+#[test]
+fn test_clean_old_raffle_missing_creator_returns_raffle_not_eligible() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup_factory(&env);
+    seed_raffles(&env, &client.address, 3);
+
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .remove(&DataKey::RaffleCreator(1u32));
+    });
+
+    assert_eq!(
+        client.try_clean_old_raffle(&1u32),
+        Err(Ok(ContractError::RaffleNotEligible))
+    );
+}
+
+#[test]
+fn test_record_leaderboard_entry_unregistered_caller_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup_factory(&env);
+    let unregistered_raffle = Address::generate(&env);
+
+    assert_eq!(
+        client.try_record_leaderboard_entry(&unregistered_raffle, &10, &100, &1000),
+        Err(Ok(ContractError::CallerNotRegisteredRaffle))
+    );
+}

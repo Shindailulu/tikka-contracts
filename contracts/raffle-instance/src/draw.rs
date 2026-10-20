@@ -1,7 +1,7 @@
 use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Vec};
 
 use raffle_shared::{
-    constants::MIN_COMMITS_FOR_DRAW,
+    constants::{MIN_COMMITS_FOR_DRAW, ORACLE_TIMEOUT_LEDGERS, RANDOMNESS_MIN_DELAY_LEDGERS},
     CancelReason, FailureReason, QuorumConfig, RandomnessSource, RandomnessType,
 };
 
@@ -10,18 +10,12 @@ use crate::events::{
     RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested,
 };
 use crate::helpers::{
-    build_internal_seed_u64, do_finalize_with_seed, read_raffle, request_randomness,
+    build_internal_seed_u64, do_finalize_with_seed, read_admin, read_raffle, request_randomness,
     require_awaiting_randomness, revert_status, transition_status, transition_to_drawing,
 };
 use crate::randomness::{build_vrf_proof_message, derive_random_seed_from_proof};
 use crate::{
-    CommitRevealEntry, DataKey, Error, RaffleStatus, ORACLE_TIMEOUT_LEDGERS,
-    RANDOMNESS_MIN_DELAY_LEDGERS,
-};
-use crate::randomness::{build_vrf_proof_message, derive_random_seed_from_proof};
-use crate::{
-    CommitRevealEntry, DataKey, Error, RaffleStatus, ORACLE_TIMEOUT_LEDGERS,
-    RANDOMNESS_MIN_DELAY_LEDGERS,
+    CommitRevealEntry, DataKey, Error, RaffleStatus,
 };
 
 pub(crate) fn finalize_raffle(env: Env) -> Result<(), Error> {
@@ -337,11 +331,7 @@ pub(crate) fn trigger_randomness_fallback(
     caller.require_auth();
     let mut raffle = read_raffle(&env)?;
 
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotAuthorized)?;
+    let admin: Address = read_admin(&env)?;
     if caller != raffle.creator && caller != admin {
         return Err(Error::NotAuthorized);
     }
@@ -553,7 +543,7 @@ pub(crate) fn provide_quorum_randomness(
     .publish(&env);
 
     if count >= k {
-        let aggregate = crate::randomness::aggregate_quorum_seeds(&env, &seeds);
+        let aggregate = crate::randomness::aggregate_quorum_seeds(&env, request_id, &seeds);
         do_finalize_with_seed(
             &env,
             raffle,
@@ -566,8 +556,16 @@ pub(crate) fn provide_quorum_randomness(
     Ok(())
 }
 
-        let aggregate = randomness::aggregate_quorum_seeds(&env, request_id, &seeds);
-        crate::helpers::do_finalize_with_seed(&env, raffle, aggregate, RandomnessType::Quorum, Some(seeds))?;
+/// Open a commit made through [`submit_commit`](crate::tickets::submit_commit)
+/// for the `CommitReveal` randomness mode (#989).
+///
+/// The reveal is accepted while the raffle is `Active` or `Drawing`; only a
+/// pre-image that hashes to the stored commitment is recorded.  Reveal is
+/// permissionless — the digest check makes any other pre-image useless.
+pub(crate) fn reveal_commit(env: Env, ticket_id: u32, preimage: BytesN<32>) -> Result<(), Error> {
+    let raffle = read_raffle(&env)?;
+    if raffle.randomness_source != RandomnessSource::CommitReveal {
+        return Err(Error::InvalidParameters);
     }
     if raffle.status != RaffleStatus::Active && raffle.status != RaffleStatus::Drawing {
         return Err(Error::InvalidStatus);

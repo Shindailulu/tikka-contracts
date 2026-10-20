@@ -115,9 +115,10 @@ fn test_trigger_next_round() {
     assert_eq!(entry.next_due, 1_000_000 + 86_400 + 86_400);
     assert_eq!(entry.last_raffle_address, Some(addr.clone()));
 
-    let instances = client.get_recurring_instances(&recurring_id);
-    assert_eq!(instances.len(), 1u32);
-    assert_eq!(instances.get(0).unwrap(), addr);
+    let instances = client.get_recurring_instances(&recurring_id, &PaginationParams { limit: 10, offset: 0 });
+    assert_eq!(instances.items.len(), 1u32);
+    assert_eq!(instances.items.get(0).unwrap(), addr);
+    assert_eq!(instances.total, 1);
 }
 
 #[test]
@@ -175,9 +176,10 @@ fn test_trigger_next_round_multiple_rounds() {
         .expect("entry exists");
     assert_eq!(entry.current_round, 3);
 
-    let instances = client.get_recurring_instances(&recurring_id);
-    assert_eq!(instances.len(), 3u32);
-    assert_eq!(instances, addrs);
+    let instances = client.get_recurring_instances(&recurring_id, &PaginationParams { limit: 10, offset: 0 });
+    assert_eq!(instances.items.len(), 3u32);
+    assert_eq!(instances.items, addrs);
+    assert_eq!(instances.total, 3);
 }
 
 #[test]
@@ -355,9 +357,10 @@ fn test_get_recurring_instances_empty_for_new() {
         &recurring_config(&env, base),
     );
 
-    let instances = client.get_recurring_instances(&recurring_id);
-    assert_eq!(instances.len(), 0u32);
-    assert_eq!(instances, SdkVec::new(&env));
+    let instances = client.get_recurring_instances(&recurring_id, &PaginationParams { limit: 10, offset: 0 });
+    assert_eq!(instances.items.len(), 0u32);
+    assert_eq!(instances.items, SdkVec::new(&env));
+    assert_eq!(instances.total, 0);
 }
 
 #[test]
@@ -379,9 +382,10 @@ fn test_infinite_recurring_raffle() {
     for round in 1..=10 {
         env.ledger().set_timestamp(1_000_000 + 86_400 * round as u64);
         let addr = client.trigger_next_round(&recurring_id);
-        let instances = client.get_recurring_instances(&recurring_id);
-        assert_eq!(instances.len(), round as u32);
-        assert_eq!(instances.get(round - 1).unwrap(), addr);
+        let instances = client.get_recurring_instances(&recurring_id, &PaginationParams { limit: 20, offset: 0 });
+        assert_eq!(instances.items.len(), round as u32);
+        assert_eq!(instances.items.get(round - 1).unwrap(), addr);
+        assert_eq!(instances.total, round as u32);
     }
 
     let entry = client
@@ -389,6 +393,38 @@ fn test_infinite_recurring_raffle() {
         .expect("entry exists");
     assert_eq!(entry.current_round, 10);
     assert!(entry.active);
+}
+
+#[test]
+fn test_recurring_storage_is_constant_per_round() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000_000);
+    let (client, _admin, _treasury) = setup_factory(&env);
+    let creator = Address::generate(&env);
+    let token = make_token(&env);
+    let base = valid_base_config(&env, &token);
+
+    let recurring_id = client.create_recurring_raffle(
+        &creator,
+        &RecurringRaffleConfig {
+            max_rounds: 5,
+            ..recurring_config(&env, base)
+        },
+    );
+
+    for round in 1..=5 {
+        env.ledger().set_timestamp(1_000_000 + 86_400 * round as u64);
+        let _addr = client.trigger_next_round(&recurring_id);
+        let page = client.get_recurring_instances(&recurring_id, &PaginationParams { limit: 2, offset: 0 });
+        assert_eq!(page.items.len(), 2.min(round as u32));
+        assert_eq!(page.total, round as u32);
+        if round > 2 {
+            assert!(page.has_more);
+        } else {
+            assert!(!page.has_more);
+        }
+    }
 }
 
 #[test]

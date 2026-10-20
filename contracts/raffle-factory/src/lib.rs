@@ -231,8 +231,8 @@ pub enum ContractError {
     /// `clean_old_raffle` was called with an ID that is not in the stable-map
     /// (never assigned or already tombstoned). Code 16.
     InvalidRaffleId = 16,
-    /// Reserved for future use — a raffle does not meet eligibility criteria
-    /// for the requested operation. Code 17.
+    /// A raffle does not meet eligibility criteria for the requested
+    /// operation (e.g. missing creator record in `clean_old_raffle`). Code 17.
     RaffleNotEligible = 17,
     /// A `checked_add` overflow occurred while accumulating volume. Code 18.
     ArithmeticOverflow = 18,
@@ -1449,7 +1449,7 @@ impl RaffleFactory {
         require_factory_raffle(&env)?;
         raffle_address.require_auth();
         if !env.storage().persistent().has(&DataKey::ValidRaffle(raffle_address.clone())) {
-            return Err(ContractError::NotAuthorized);
+            return Err(ContractError::CallerNotRegisteredRaffle);
         }
         Self::upsert_leaderboard(&env, &DataKey::TopByTickets, raffle_address.clone(), tickets_sold);
         Self::upsert_leaderboard(&env, &DataKey::TopByPrize, raffle_address.clone(), prize_amount);
@@ -1520,7 +1520,7 @@ impl RaffleFactory {
             .storage()
             .persistent()
             .get(&DataKey::RaffleCreator(raffle_id))
-            .ok_or(ContractError::InvalidRaffleId)?;
+            .ok_or(ContractError::RaffleNotEligible)?;
         let category: Option<String> = env
             .storage()
             .persistent()

@@ -10,6 +10,13 @@ import { OraclePipeline } from './pipeline';
  * /metrics for observability.
  */
 async function main(): Promise<void> {
+  if (process.argv.includes('--version') || process.argv.includes('-v')) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pkg = require('../package.json') as { name: string; version: string };
+    process.stdout.write(`${pkg.name} v${pkg.version}\n`);
+    process.exit(0);
+  }
+
   const config = loadAndValidateConfig();
   configureLogger({ level: config.logLevel, production: config.nodeEnv === 'production' });
 

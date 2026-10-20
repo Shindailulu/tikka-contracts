@@ -49,9 +49,9 @@ pub(crate) fn init_bounds_config(
 	}
 }
 pub(crate) use crate::{RaffleInstance as Contract, RaffleInstanceClient as ContractClient};
-use soroban_sdk::{
+pub use soroban_sdk::{
 	contract, contractimpl,
-	testutils::{Events, Ledger},
+	testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
 	token::StellarAssetClient,
 	Address, BytesN, Env, String,
 };

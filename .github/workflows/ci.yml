@@ -150,6 +150,8 @@ jobs:
         run: make oracle-lint
       - name: TypeScript compile check
         run: make oracle-typecheck
+      - name: Smoke test entrypoint
+        run: cd oracle && npm run build && node dist/index.js --version
       - name: Run tests
         run: make oracle-test-ci
 

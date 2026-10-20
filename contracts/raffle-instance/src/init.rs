@@ -122,6 +122,10 @@ pub(crate) fn init(
     let swap_deadline = config
         .swap_deadline_seconds
         .unwrap_or(DEFAULT_SWAP_DEADLINE_SECONDS);
+    let prize_token = config
+        .prize_token
+        .clone()
+        .unwrap_or_else(|| config.payment_token.clone());
 
     let raffle = Raffle {
         creator: creator.clone(),
@@ -135,7 +139,7 @@ pub(crate) fn init(
         max_tickets_per_address: config.max_tickets_per_address,
         ticket_price: config.ticket_price,
         payment_token: config.payment_token.clone(),
-        prize_token: prize_token.clone(),
+        prize_token,
         prize_amount: config.prize_amount,
         prizes: config.prizes.clone(),
         tickets_sold: 0,

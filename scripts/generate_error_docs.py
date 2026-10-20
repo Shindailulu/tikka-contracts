@@ -114,6 +114,13 @@ INSTANCE_DESCRIPTIONS: dict[str, str] = {
     "OracleNotRegistered": "Caller is not a registered oracle for this raffle",
     "DuplicateOracleSubmission": "This oracle has already submitted its seed",
     "CommitAlreadySubmitted": "A commit has already been submitted for this draw",
+    "DrawingNotStarted": "The raffle has not entered the drawing phase",
+    "MissingCommit": "Commitment hash is missing for this oracle",
+    "CommitMismatch": "Revealed seed does not match committed hash",
+    "TooFewCommits": "Quorum not reached: insufficient commits",
+    "RandomnessSourceTooWeakForPrize": "Randomness source is too weak for the configured prize",
+    "AdminTransferPending": "Admin transfer already pending",
+    "NoPendingTransfer": "No pending admin transfer",
 }
 
 INSTANCE_MESSAGES: dict[str, str] = {
@@ -174,6 +181,13 @@ INSTANCE_MESSAGES: dict[str, str] = {
     "OracleNotRegistered": "Caller is not a registered oracle for this raffle",
     "DuplicateOracleSubmission": "This oracle has already submitted its seed",
     "CommitAlreadySubmitted": "This oracle has already committed for this draw",
+    "DrawingNotStarted": "Drawing has not started yet",
+    "MissingCommit": "Commitment hash is missing",
+    "CommitMismatch": "Revealed seed does not match committed hash",
+    "TooFewCommits": "Not enough oracle commits received",
+    "RandomnessSourceTooWeakForPrize": "Randomness source is too weak for this prize",
+    "AdminTransferPending": "Admin transfer already pending",
+    "NoPendingTransfer": "No pending admin transfer",
 }
 
 FACTORY_DESCRIPTIONS: dict[str, str] = {

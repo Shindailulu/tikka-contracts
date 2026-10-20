@@ -79,11 +79,14 @@ use soroban_sdk::{
 use raffle_shared::constants::{
     MAX_RECURRING_INTERVAL_SECONDS, MIN_RECURRING_INTERVAL_SECONDS,
 };
-use raffle_shared::{RaffleConfigBuilder, RecurringRaffleConfig};
+use raffle_shared::{
+    effective_limit, PageResultRaffles, PaginationParams, RaffleConfigBuilder,
+    RecurringRaffleConfig,
+};
 
 use crate::events;
 use crate::registry::PartnerStats;
-use crate::{ContractError, DataKey, RaffleFactory};
+use crate::{ContractError, DataKey, RaffleFactory, RaffleFactoryArgs, RaffleFactoryClient};
 
 /// On-chain state for a recurring raffle schedule.
 #[derive(Clone)]
@@ -111,8 +114,8 @@ pub enum RecurringDataKey {
     RecurringRaffle(u32),
     /// Monotonic counter assigned to the next recurring raffle ID.
     NextRecurringId,
-    /// ID -> list of raffle instance addresses created across all rounds so far.
-    RecurringRaffleInstances(u32),
+    /// (recurring_id, round) -> Address of the raffle instance deployed for that round.
+    RecurringRound(u32, u32),
 }
 
 #[contractimpl]
@@ -163,9 +166,6 @@ impl RaffleFactory {
         env.storage()
             .persistent()
             .set(&RecurringDataKey::NextRecurringId, &(recurring_id.saturating_add(1)));
-        env.storage()
-            .persistent()
-            .set(&RecurringDataKey::RecurringRaffleInstances(recurring_id), &Vec::<Address>::new(&env));
 
         events::RecurringRaffleCreated {
             recurring_id,
@@ -226,19 +226,15 @@ impl RaffleFactory {
             config,
         )?;
 
+        let round_index = entry.current_round;
         entry.current_round = entry.current_round.saturating_add(1);
         entry.next_due = now.saturating_add(entry.config.interval_seconds);
         entry.last_raffle_address = Some(raffle_address.clone());
 
-        let mut instances: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&RecurringDataKey::RecurringRaffleInstances(recurring_id))
-            .unwrap_or_else(|| Vec::new(&env));
-        instances.push_back(raffle_address.clone());
-        env.storage()
-            .persistent()
-            .set(&RecurringDataKey::RecurringRaffleInstances(recurring_id), &instances);
+        env.storage().persistent().set(
+            &RecurringDataKey::RecurringRound(recurring_id, round_index),
+            &raffle_address,
+        );
 
         env.storage()
             .persistent()
@@ -338,14 +334,56 @@ impl RaffleFactory {
             .get(&RecurringDataKey::RecurringRaffle(recurring_id))
     }
 
-    /// Retrieve all raffle instance addresses deployed by a recurring schedule.
+    /// Retrieve a paginated slice of raffle instance addresses deployed by a recurring schedule.
     pub fn get_recurring_instances(
         env: Env,
         recurring_id: u32,
-    ) -> Vec<Address> {
-        env.storage()
+        params: PaginationParams,
+    ) -> PageResultRaffles {
+        let entry: RecurringRaffleEntry = match env
+            .storage()
             .persistent()
-            .get(&RecurringDataKey::RecurringRaffleInstances(recurring_id))
-            .unwrap_or_else(|| Vec::new(&env))
+            .get(&RecurringDataKey::RecurringRaffle(recurring_id))
+        {
+            Some(e) => e,
+            None => {
+                return PageResultRaffles {
+                    items: Vec::new(&env),
+                    total: 0,
+                    has_more: false,
+                };
+            }
+        };
+
+        let total = entry.current_round;
+        let lim = effective_limit(params.limit);
+        let offset = params.offset;
+
+        if offset >= total {
+            return PageResultRaffles {
+                items: Vec::new(&env),
+                total,
+                has_more: false,
+            };
+        }
+
+        let end = offset.saturating_add(lim).min(total);
+        let mut items = Vec::new(&env);
+        for round in offset..end {
+            if let Some(addr) = env
+                .storage()
+                .persistent()
+                .get::<_, Address>(&RecurringDataKey::RecurringRound(recurring_id, round))
+            {
+                items.push_back(addr);
+            }
+        }
+
+        let has_more = end < total;
+        PageResultRaffles {
+            items,
+            total,
+            has_more,
+        }
     }
 }
